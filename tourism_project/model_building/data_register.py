@@ -1,12 +1,6 @@
-"""
-Data Registration
------------------
-Validates the tourism dataset that lives inside the GitHub repository
-(tourism_project/data/tourism.csv) and prints a short summary.
-
-The script exits with a non-zero status if validation fails, which makes the
-GitHub Actions job fail fast before any downstream step runs.
-"""
+# Checks that tourism.csv in the repo has the columns/target this project
+# expects, and prints a short summary. Exits non-zero on failure so the
+# GitHub Actions job fails fast before anything downstream runs.
 import hashlib
 import sys
 from pathlib import Path
@@ -27,33 +21,28 @@ EXPECTED_COLUMNS = [
 
 
 def file_md5(path: Path) -> str:
-    """Fingerprint of the dataset version being registered."""
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
 def main() -> None:
-    # 1. The file must exist in the repository
     if not DATA_PATH.exists():
         sys.exit(f"ERROR: dataset not found at {DATA_PATH}")
 
     df = pd.read_csv(DATA_PATH)
 
-    # 2. All expected columns must be present
+    # All expected columns need to be there, and the target has to be binary
     missing_cols = [c for c in EXPECTED_COLUMNS if c not in df.columns]
     if missing_cols:
         sys.exit(f"ERROR: missing expected columns: {missing_cols}")
     extra_cols = [c for c in df.columns if c not in EXPECTED_COLUMNS]
 
-    # 3. The target must be binary (0/1)
     bad_labels = set(df[TARGET].dropna().unique()) - {0, 1}
     if bad_labels:
         sys.exit(f"ERROR: unexpected target values in {TARGET}: {bad_labels}")
 
-    # 4. Dataset must not be empty
     if df.empty:
         sys.exit("ERROR: dataset is empty")
 
-    # ---------------- Summary ----------------
     print("=" * 60)
     print("DATASET REGISTRATION SUMMARY")
     print("=" * 60)
