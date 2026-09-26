@@ -1,17 +1,7 @@
-"""
-Model Building with Experimentation Tracking
---------------------------------------------
-1. Loads the train / test splits produced by the data-prep job (workflow artifact).
-2. Defines six candidate models (Decision Tree, Bagging, Random Forest, AdaBoost,
-   Gradient Boosting, XGBoost) with hyper-parameter grids.
-3. Tunes each model with 5-fold stratified GridSearchCV (scoring = F1).
-4. Logs EVERY tuned parameter combination to MLflow as a nested run, plus the
-   best parameters and train/test metrics on the parent run.
-5. Selects the best model on cross-validated F1 (the test set is used only for
-   final evaluation, never for selection) and saves the full pipeline
-   (preprocessing + model) to tourism_project/deployment/ so the workflow can
-   commit it to the repository.
-"""
+# Loads the train/test artifact from the data-prep job, tunes six candidate
+# models (Decision Tree, Bagging, Random Forest, AdaBoost, Gradient Boosting,
+# XGBoost) with GridSearchCV, logs every combination to MLflow, and saves
+# whichever model comes out on top (by cross-validated F1) for deployment.
 import logging
 import os
 import time
@@ -42,20 +32,19 @@ warnings.filterwarnings("ignore")
 MODEL_DIR = Path("tourism_project/deployment")
 MODEL_PATH = MODEL_DIR / "best_tourism_model_v1.joblib"
 
-# ---------------- MLflow setup ----------------
 # In GitHub Actions the workflow starts an MLflow server on port 5000 and sets
-# MLFLOW_TRACKING_URI; locally we fall back to a file store (./mlruns).
+# MLFLOW_TRACKING_URI; locally this falls back to a file store (./mlruns).
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "file:./mlruns"))
 mlflow.set_experiment("tourism-wellness-package")
 
-# ---------------- Load splits (workflow artifact) ----------------
+# Load splits (workflow artifact)
 Xtrain = pd.read_csv("Xtrain.csv")
 Xtest = pd.read_csv("Xtest.csv")
 ytrain = pd.read_csv("ytrain.csv").squeeze("columns")
 ytest = pd.read_csv("ytest.csv").squeeze("columns")
 print(f"Train {Xtrain.shape} | Test {Xtest.shape}")
 
-# ---------------- Preprocessing ----------------
+# Preprocessing
 categorical_features = ["TypeofContact", "Occupation", "Gender", "ProductPitched",
                         "MaritalStatus", "Designation"]
 numeric_features = [c for c in Xtrain.columns if c not in categorical_features]
@@ -68,7 +57,7 @@ preprocessor = make_column_transformer(
 # Class imbalance (~19% buyers): weight the minority class
 scale_pos_weight = (ytrain == 0).sum() / (ytrain == 1).sum()
 
-# ---------------- Candidate models + hyper-parameter grids ----------------
+# Candidate models + hyper-parameter grids
 candidates = {
     "DecisionTree": (
         DecisionTreeClassifier(class_weight="balanced", random_state=RANDOM_STATE),
@@ -96,6 +85,9 @@ candidates = {
          "model__estimator__max_depth": [1, 2]},
     ),
     "GradientBoosting": (
+        # sklearn's GradientBoostingClassifier has no class_weight or
+        # scale_pos_weight equivalent, so unlike the other five candidates
+        # this one is not corrected for the ~19% positive rate.
         GradientBoostingClassifier(random_state=RANDOM_STATE),
         {"model__n_estimators": [100, 200],
          "model__learning_rate": [0.05, 0.1],
@@ -116,7 +108,7 @@ cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
 
 
 def evaluate(model, X, y):
-    """Classification metrics for a fitted pipeline."""
+    # accuracy / precision / recall / f1 / roc_auc for a fitted pipeline
     pred = model.predict(X)
     proba = model.predict_proba(X)[:, 1]
     return {
@@ -169,7 +161,7 @@ for name, (estimator, grid) in candidates.items():
           f"test_f1={test_m['f1']:.3f}  test_recall={test_m['recall']:.3f}  "
           f"({time.time() - start:.0f}s)")
 
-# ---------------- Compare & select ----------------
+# Compare & select
 comparison = pd.DataFrame(results).sort_values("cv_f1", ascending=False)
 pd.set_option("display.width", 200)
 print("\nModel comparison (sorted by cross-validated F1):")
@@ -184,7 +176,7 @@ print(f"Best params: {comparison.iloc[0]['best_params']}")
 print("\nClassification report on held-out test set:")
 print(classification_report(ytest, best_model.predict(Xtest), digits=3))
 
-# ---------------- Save best model for deployment ----------------
+# Save best model for deployment
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 joblib.dump(best_model, MODEL_PATH)
 
