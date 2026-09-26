@@ -1,8 +1,6 @@
-"""
-Streamlit app - Wellness Tourism Package purchase prediction ("Visit with Us").
-Loads the model committed to this folder by the GitHub Actions pipeline,
-collects customer inputs into a DataFrame and returns a purchase prediction.
-"""
+# Streamlit app for the Wellness Tourism Package purchase prediction.
+# Loads the model this repo's pipeline committed, collects the customer's
+# details into a one-row DataFrame, and returns a purchase prediction.
 from pathlib import Path
 
 import joblib
