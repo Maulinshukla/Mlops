@@ -1,70 +1,64 @@
-"""
-Data Preparation
-----------------
-1. Loads the dataset directly from the repository data folder.
-2. Cleans the data and removes columns with no predictive value.
-3. Splits into stratified train / test sets and saves them locally as CSVs
-   (Xtrain.csv, Xtest.csv, ytrain.csv, ytest.csv) in the working directory.
-   GitHub Actions uploads these files as a workflow artifact for the training job.
-"""
 from pathlib import Path
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
+
+# Loads tourism.csv from the repo, cleans it, and writes a stratified
+# train/test split that the next pipeline job picks up as an artifact.
 
 DATA_PATH = Path("tourism_project/data/tourism.csv")
 TARGET = "ProdTaken"
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
-# ---------------- Load ----------------
 df = pd.read_csv(DATA_PATH)
 print(f"Loaded {DATA_PATH}: {df.shape}")
 
-# ---------------- Clean ----------------
-# a) Drop identifiers / index artefacts: they carry no information about
-#    purchase behaviour and would only add noise (or leak row order).
+# Identifiers don't carry any behavioural signal, so drop them along with
+# the stray index column pandas sometimes leaves behind on export.
 drop_cols = [c for c in df.columns if c.startswith("Unnamed")] + ["CustomerID"]
 df = df.drop(columns=drop_cols)
 print(f"Dropped columns: {drop_cols}")
 
-# b) Normalise text values (strip stray whitespace)
 cat_cols = df.select_dtypes(include="object").columns.tolist()
 for col in cat_cols:
     df[col] = df[col].str.strip()
 
-# c) Fix inconsistent labels: 'Fe Male' is a typo of 'Female'.
-#    NOTE: 'Single' and 'Unmarried' are kept separate on purpose - they have
-#    very different purchase rates in the data, so merging would lose signal.
+# 'Fe Male' is a typo for 'Female'. Single and Unmarried are kept apart on
+# purpose - their purchase rates differ enough (~36% vs ~24%) that merging
+# them would throw away real signal.
 df["Gender"] = df["Gender"].replace({"Fe Male": "Female"})
 
-# d) Remove exact duplicate customer records (after dropping IDs) so the same
-#    record cannot appear in both train and test sets.
 n_before = len(df)
 df = df.drop_duplicates().reset_index(drop=True)
 print(f"Removed {n_before - len(df)} duplicate rows")
 
-# e) Impute any missing values (defensive - makes the pipeline robust to
-#    future data refreshes): median for numeric, mode for categorical.
-num_cols = [c for c in df.columns if c not in cat_cols + [TARGET]]
-for col in num_cols:
-    if df[col].isna().any():
-        df[col] = df[col].fillna(df[col].median())
-for col in cat_cols:
-    if df[col].isna().any():
-        df[col] = df[col].fillna(df[col].mode()[0])
-print(f"Missing values after cleaning: {int(df.isna().sum().sum())}")
-
-# ---------------- Split ----------------
 X = df.drop(columns=[TARGET])
 y = df[TARGET]
 
-# Stratify to keep the ~19% positive rate identical in both splits
+# Stratified so the ~19% positive rate holds in both sets.
 Xtrain, Xtest, ytrain, ytest = train_test_split(
     X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y
 )
 
-# ---------------- Save locally ----------------
+# Impute AFTER the split, using train statistics only, then apply those same
+# values to test. Doing this on the full dataset before splitting would leak
+# test-set information into training. This dataset has no missing values
+# today so the loops below are a no-op, but it keeps the split leakage-free
+# if a future data refresh isn't as clean.
+numeric_features = [c for c in X.columns if c not in cat_cols]
+for col in numeric_features:
+    if Xtrain[col].isna().any():
+        fill_value = Xtrain[col].median()
+        Xtrain[col] = Xtrain[col].fillna(fill_value)
+        Xtest[col] = Xtest[col].fillna(fill_value)
+for col in cat_cols:
+    if Xtrain[col].isna().any():
+        fill_value = Xtrain[col].mode()[0]
+        Xtrain[col] = Xtrain[col].fillna(fill_value)
+        Xtest[col] = Xtest[col].fillna(fill_value)
+print(f"Missing values after cleaning: {int(Xtrain.isna().sum().sum() + Xtest.isna().sum().sum())}")
+
 Xtrain.to_csv("Xtrain.csv", index=False)
 Xtest.to_csv("Xtest.csv", index=False)
 ytrain.to_csv("ytrain.csv", index=False)
